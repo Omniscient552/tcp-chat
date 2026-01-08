@@ -1,13 +1,33 @@
 package server
 
 import (
-	"bufio"
 	"fmt"
 	"net"
-	"os"
 
 	"tcp-chat/internal/models"
 )
+
+// ------------------------------------------------------------------|
+
+type Server struct {
+	client       map[net.Conn]string // conn-name
+	addClient    chan Client
+	deleteClient chan Client
+	broadcast    chan string
+}
+
+// ------------------------------------------------------------------|
+
+func NewServer() *Server {
+	return &Server{
+		client:       make(map[net.Conn]string),
+		addClient:    make(chan Client, 4),
+		deleteClient: make(chan Client, 4),
+		broadcast:    make(chan string, 4),
+	}
+}
+
+// ------------------------------------------------------------------|
 
 func RunServer() {
 	listener, err := net.Listen("tcp", models.PORT)
@@ -17,6 +37,9 @@ func RunServer() {
 	}
 	defer listener.Close()
 
+	s := NewServer()
+	go s.manager()
+
 	fmt.Println("Server is listening...")
 
 	for {
@@ -25,32 +48,43 @@ func RunServer() {
 			fmt.Printf("conn: %v\n", err)
 			return
 		}
-		_, err = conn.Write([]byte("Hello, World!\n"))
-		if err != nil {
-			return
-		}
-		go client(conn)
+
+		go client(conn, s.addClient, s.deleteClient)
 	}
 }
 
-func client(conn net.Conn) {
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("_________YES________")
+// ------------------------------------------------------------------|
 
-	for scanner.Scan() {
-		fmt.Println("_________YES________")
+func (s *Server) manager() {
+	for {
+		select {
+		case c := <-s.addClient: // подключение клиента
+			fmt.Println("Connection client: ", c.name)
+			s.client[c.conn] = c.name
+			fmt.Println("All client: ", len(s.client))
 
-		c, err := conn.Read([]byte(scanner.Text()))
-		if err != nil {
-			fmt.Println(err)
-			return
+		case c := <-s.deleteClient: // отключение клиента
+			fmt.Println("Disconnect client: ", c.name)
+			delete(s.client, c.conn)
+			fmt.Println("All client: ", len(s.client))
+
+		case m := <-s.broadcast: // отправка всем сообщение
+			fmt.Println("Message: ", m)
+
+			for c := range s.client {
+				sendMessage(c, m)
+			}
 		}
-		fmt.Println(c)
 	}
-	fmt.Println("_________NO________")
-
-	if err := scanner.Err(); err != nil {
-		fmt.Println(err)
-	}
-	defer conn.Close()
 }
+
+// ------------------------------------------------------------------|
+
+func sendMessage(conn net.Conn, message string) {
+	_, err := conn.Write([]byte(message))
+	if err != nil {
+		fmt.Printf("Error send message: %v\n", err)
+	}
+}
+
+// ------------------------------------------------------------------|
