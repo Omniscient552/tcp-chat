@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strings"
 )
@@ -15,6 +16,13 @@ type Client struct {
 
 // ------------------------------------------------------------------|
 
+type Message struct {
+	name string
+	msg  string
+}
+
+// ------------------------------------------------------------------|
+
 func newClient(c net.Conn, n string) Client {
 	return Client{
 		conn: c,
@@ -24,50 +32,63 @@ func newClient(c net.Conn, n string) Client {
 
 // ------------------------------------------------------------------|
 
-func client(conn net.Conn, addClient, deleteClient chan Client) {
-	defer conn.Close()
-
-	_, err := conn.Write([]byte("Enter your name: "))
-	if err != nil {
-		fmt.Printf("scan name: %v\n", err)
-	}
-
-	n := make([]byte, 4) // Надо придумать другой метод чтение
-	_, err = conn.Read(n)
+func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan<- Message) {
+	client, err := createClient(conn)
 	if err != nil {
 		fmt.Println(err)
-		return
 	}
 
-	name := string(n)
-	fmt.Printf("Name: %#v , len: %d\n", name, len(name))
-
-	name = strings.TrimSpace(name)
-	if len(name) == 0 {
-		fmt.Println("The name is empty")
-		return
-	}
-
-	client := newClient(conn, name)
 	addClient <- client
 
 	for {
-		m := make([]byte, 1024)
-		_, err := conn.Read([]byte(m))
+		b := make([]byte, 1024)
+		n, err := conn.Read(b)
 		if err != nil {
-			fmt.Printf("input error: %v\n", err)
+			if err != io.EOF {
+				fmt.Printf("read error: %v\n", err)
+			}
 			break
 		}
 
-		message := strings.TrimSpace(string(m))
+		message := strings.TrimSpace(string(b[:n]))
 
 		if len(message) == 0 {
 			continue
 		}
-		fmt.Printf("INPUT: %s\n", message)
+
+		newMessage := Message{
+			name: client.name,
+			msg:  message,
+		}
+
+		broadcast <- newMessage
 	}
 
 	deleteClient <- client
+}
+
+// ------------------------------------------------------------------|
+
+func createClient(conn net.Conn) (Client, error) {
+	_, err := conn.Write([]byte("Enter your name: "))
+	if err != nil {
+		return Client{}, fmt.Errorf("write error: %v", err)
+	}
+
+	b := make([]byte, 1024)
+	n, err := conn.Read(b)
+	if err != nil {
+		return Client{}, fmt.Errorf("read error: %v", err)
+	}
+
+	name := strings.TrimSpace(string(b[:n]))
+
+	name = strings.TrimSpace(name)
+	if len(name) == 0 {
+		return Client{}, fmt.Errorf("the name is empty")
+	}
+
+	return newClient(conn, name), nil
 }
 
 // ------------------------------------------------------------------|
