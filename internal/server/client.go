@@ -5,13 +5,16 @@ import (
 	"io"
 	"net"
 	"strings"
+
+	"tcp-chat/internal/models"
 )
 
 // ------------------------------------------------------------------|
 
 type Client struct {
-	conn net.Conn
-	name string
+	conn   net.Conn
+	name   string
+	change bool
 }
 
 // ------------------------------------------------------------------|
@@ -56,6 +59,21 @@ func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan
 			continue
 		}
 
+		if strings.HasPrefix(message, "/name") {
+			part := strings.Split(message, " ")
+			newName := strings.TrimSpace(part[1])
+
+			if newName == "" {
+				sendMessage(client.conn, models.EMPTY_NAME)
+				continue
+			}
+			client.name = newName
+			client.change = true
+
+			addClient <- client
+			continue
+		}
+
 		newMessage := Message{
 			name: client.name,
 			msg:  message,
@@ -70,7 +88,7 @@ func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan
 // ------------------------------------------------------------------|
 
 func createClient(conn net.Conn) (Client, error) {
-	_, err := conn.Write([]byte("Enter your name: "))
+	_, err := conn.Write([]byte("[ENTER YOUR NAME]: "))
 	if err != nil {
 		return Client{}, fmt.Errorf("write error: %v", err)
 	}
