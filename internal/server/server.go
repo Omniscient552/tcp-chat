@@ -11,7 +11,7 @@ import (
 // ------------------------------------------------------------------|
 
 type Server struct {
-	client       map[net.Conn]string // conn-name
+	client       map[string]chan string // name-chan
 	addClient    chan Client
 	deleteClient chan Client
 	broadcast    chan Message
@@ -21,7 +21,7 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		client:       make(map[net.Conn]string),
+		client:       make(map[string]chan string),
 		addClient:    make(chan Client, 4),
 		deleteClient: make(chan Client, 4),
 		broadcast:    make(chan Message, 4),
@@ -50,7 +50,7 @@ func RunServer() {
 			return
 		}
 
-		go client(conn, s.addClient, s.deleteClient, s.broadcast)
+		go reader(conn, s.addClient, s.deleteClient, s.broadcast)
 	}
 }
 
@@ -61,44 +61,27 @@ func (s *Server) manager() {
 		select {
 		case c := <-s.addClient:
 			if c.change {
-				oldName, _ := s.client[c.conn]
-				msg := fmt.Sprintf("User %s changed name to %s", oldName, c.name)
-
-				s.client[c.conn] = c.name
-				c.change = false
-
-				go notification(s.client, c.conn, msg)
-				continue
+				changeClientName(s.client, c.name, c.writeCh)
 			}
 
-			if len(s.client) >= models.MAX_CLIENT {
-				sendMessage(c.conn, models.CHAT_FULL)
+			ok, msg := saveClient(s.client, c.name, c.writeCh)
+
+			if !ok {
+				sendMessage(c.conn, msg)
 				c.conn.Close()
 				continue
 			}
 
-			for _, name := range s.client {
-				if c.name == name {
-					sendMessage(c.conn, models.NAME_TAKEN)
-					c.conn.Close()
-					break
-				}
-			}
-
-			s.client[c.conn] = c.name
-
-			msg := c.name + models.USER_JOINED
-			go notification(s.client, c.conn, msg)
-
+			notification(s.client, msg)
 			fmt.Println("Connection client: ", c.name)
 
 		case c := <-s.deleteClient:
 			c.conn.Close()
-			delete(s.client, c.conn)
+			delete(s.client, c.name)
 			fmt.Println("Disconnect client: ", c.name)
 
-			msg := c.name + models.USER_LEFT
-			go notification(s.client, c.conn, msg)
+			msg := c.name + models.UserLeft
+			notification(s.client, msg)
 
 		case newMessage := <-s.broadcast:
 			message := formatMessage(newMessage.name, newMessage.msg)
@@ -128,13 +111,55 @@ func sendMessage(conn net.Conn, message string) {
 
 // ------------------------------------------------------------------|
 
-func notification(client map[net.Conn]string, conn net.Conn, msg string) {
-	for c := range client {
-		if c == conn {
+func notification(client map[string]chan string, msg string) {
+	for _, ch := range client {
+		// c <- msg
+		select {
+		case ch <- msg:
 			continue
+		default:
+			go func() {
+				select {
+				case <-time.After(5 * time.Second):
+				case ch <- msg:
+				}
+			}()
 		}
-		sendMessage(c, msg)
 	}
+}
+
+// ------------------------------------------------------------------|
+
+func saveClient(client map[string]chan string, name string, writeCh chan string) (bool, string) {
+	if len(client) >= models.MaxClinet {
+		return false, models.ChatFull
+	}
+
+	if _, exists := client[name]; exists {
+		return false, models.NameTaken
+	}
+
+	client[name] = writeCh
+
+	msg := name + models.UserJoined
+	return true, msg
+}
+
+// ------------------------------------------------------------------|
+
+func changeClientName(client map[string]chan string, name string, writeCh chan string) {
+	var oldName string
+	for oldName, ch := range client {
+		if ch == writeCh {
+			delete(client, oldName)
+			client[name] = writeCh
+			break
+		}
+	}
+
+	msg := fmt.Sprintf("User %s changed name to %s", oldName, name)
+
+	go notification(client, msg)
 }
 
 // ------------------------------------------------------------------|

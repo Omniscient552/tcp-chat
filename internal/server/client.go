@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -12,9 +13,10 @@ import (
 // ------------------------------------------------------------------|
 
 type Client struct {
-	conn   net.Conn
-	name   string
-	change bool
+	conn    net.Conn
+	name    string
+	change  bool
+	writeCh chan string
 }
 
 // ------------------------------------------------------------------|
@@ -35,13 +37,16 @@ func newClient(c net.Conn, n string) Client {
 
 // ------------------------------------------------------------------|
 
-func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan<- Message) {
+func reader(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan<- Message) {
 	client, err := createClient(conn)
 	if err != nil {
 		fmt.Println(err)
 	}
 
+	writeCh := make(chan string, 1)
+	client.writeCh = writeCh
 	addClient <- client
+	go writer(conn, writeCh)
 
 	for {
 		b := make([]byte, 1024)
@@ -64,7 +69,7 @@ func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan
 			newName := strings.TrimSpace(part[1])
 
 			if newName == "" {
-				sendMessage(client.conn, models.EMPTY_NAME)
+				sendMessage(client.conn, models.EmptyName)
 				continue
 			}
 			client.name = newName
@@ -87,19 +92,24 @@ func client(conn net.Conn, addClient, deleteClient chan<- Client, broadcast chan
 
 // ------------------------------------------------------------------|
 
+func writer(conn net.Conn, ch <-chan string) {
+	for msg := range ch {
+		conn.Write([]byte(msg))
+	}
+}
+
+// ------------------------------------------------------------------|
+
 func createClient(conn net.Conn) (Client, error) {
 	_, err := conn.Write([]byte("[ENTER YOUR NAME]: "))
 	if err != nil {
 		return Client{}, fmt.Errorf("write error: %v", err)
 	}
 
-	b := make([]byte, 1024)
-	n, err := conn.Read(b)
-	if err != nil {
-		return Client{}, fmt.Errorf("read error: %v", err)
-	}
+	sc := bufio.NewScanner(conn)
 
-	name := strings.TrimSpace(string(b[:n]))
+	sc.Scan()
+	name := sc.Text()
 
 	name = strings.TrimSpace(name)
 	if len(name) == 0 {
